@@ -120,6 +120,67 @@ class V4l2Camera:
         return Frame(data=proc.stdout, fmt="jpeg", width=w, height=h)
 
 
+class ArduinoCamera:
+    """The Arduino UNO Q camera via the App Bricks SDK — the real, SDK-faithful path.
+
+    Uses ``arduino.app_peripherals.camera.Camera`` (see docs/arduino-camera.md), which is the
+    unified Arduino abstraction over USB (V4L), CSI, IP, and WebSocket cameras. The deltaco USB
+    camera is picked up as the default V4L camera. `capture()` returns a numpy frame, encoded
+    here to JPEG with cv2 (both ship in the App Bricks runtime on the board). The SDK and cv2 are
+    imported lazily so this module still loads (and tests run) on a Mac without them.
+    """
+
+    def __init__(self, source=0) -> None:
+        self.source = source
+        self._cam = None
+        self._quality = None
+
+    def _ensure(self, quality: str):
+        w, h, fps = QUALITY_LADDER.get(quality, QUALITY_LADDER[DEFAULT_QUALITY])
+        if self._cam is None or self._quality != quality:
+            self.close()
+            from arduino.app_peripherals.camera import Camera  # lazy: only on the board
+            self._cam = Camera(self.source, resolution=(w, h), fps=fps)
+            self._cam.start()
+            self._quality = quality
+        return w, h
+
+    def capture(self, quality: str) -> Frame:
+        import cv2  # lazy: App Bricks runtime only
+        self._ensure(quality)
+        frame = self._cam.capture()
+        if frame is None:
+            raise OSError("arduino camera returned no frame")
+        ok, buf = cv2.imencode(".jpg", frame)
+        if not ok:
+            raise OSError("jpeg encode failed")
+        fh, fw = int(frame.shape[0]), int(frame.shape[1])
+        return Frame(data=buf.tobytes(), fmt="jpeg", width=fw, height=fh)
+
+    def close(self) -> None:
+        if self._cam is not None:
+            try:
+                self._cam.stop()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            self._cam = None
+
+
+def detect_arduino_camera(source=0) -> "ArduinoCamera | None":
+    """Return an Arduino App Bricks camera if the SDK is present AND a frame can be captured."""
+    try:
+        import arduino.app_peripherals.camera  # noqa: F401
+    except Exception:  # noqa: BLE001 - SDK absent (e.g. on a Mac)
+        return None
+    cam = ArduinoCamera(source)
+    try:
+        cam.capture("low")  # prove a real frame comes back
+        return cam
+    except Exception:  # noqa: BLE001 - no camera plugged / capture failed
+        cam.close()
+        return None
+
+
 def detect_v4l2_camera(device: str = "/dev/video0") -> "V4l2Camera | None":
     """Return a real camera if a video device AND a capture tool are present, else None."""
     import os
@@ -136,15 +197,26 @@ SOURCE_MODES = ("auto", "mock", "real")
 
 def select_camera(mode: str = "auto", device: str = "/dev/video0") -> Camera:
     """Pick the camera by source mode — switchable on demand (startup env or the live API):
-    ``auto`` = real device if present else mock; ``mock`` forces synthetic; ``real`` (alias
-    ``v4l2``) requires a real device (raises if none). Real hardware is plug-and-play while an
-    end-to-end test can force mock with no camera."""
+
+    - ``auto``  : the Arduino App Bricks camera on a UNO Q, else a generic V4L2 device, else mock.
+    - ``mock``  : synthetic PNG frames (an end-to-end test can run with no camera).
+    - ``real`` / ``arduino`` : the Arduino UNO Q camera (deltaco USB via the App Bricks SDK),
+      falling back to a generic V4L2 device; raises if no camera. The SDK-faithful path.
+    - ``v4l2``  : a generic /dev/video* camera via ffmpeg/fswebcam (non-UNO-Q hosts).
+    """
     mode = (mode or "auto").lower()
     if mode == "mock":
         return MockCamera()
-    real = detect_v4l2_camera(device)
-    if real is not None:
-        return real
-    if mode in ("real", "v4l2"):
-        raise OSError("no camera at " + device + " (or no ffmpeg/fswebcam)")
+
+    if mode in ("auto", "real", "arduino"):
+        arduino = detect_arduino_camera()
+        if arduino is not None:
+            return arduino
+
+    v4l2 = detect_v4l2_camera(device)
+    if v4l2 is not None:
+        return v4l2
+
+    if mode in ("real", "arduino", "v4l2"):
+        raise OSError("no Arduino/UNO-Q camera or V4L2 device available")
     return MockCamera()

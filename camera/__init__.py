@@ -4,10 +4,12 @@ from .frame import FRAME_SCHEMA, decode_frame, encode_frame, frame_bytes
 from .service import CameraService
 from .source import (
     QUALITY_LADDER,
+    ArduinoCamera,
     Camera,
     Frame,
     MockCamera,
     V4l2Camera,
+    detect_arduino_camera,
     detect_v4l2_camera,
     select_camera,
 )
@@ -16,7 +18,9 @@ __all__ = [
     "CameraService",
     "Camera",
     "MockCamera",
+    "ArduinoCamera",
     "V4l2Camera",
+    "detect_arduino_camera",
     "detect_v4l2_camera",
     "select_camera",
     "Frame",

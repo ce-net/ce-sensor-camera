@@ -65,6 +65,12 @@ def test_detect_v4l2_returns_none_without_device():
     assert detect_v4l2_camera("/dev/video-nope-999") is None
 
 
+def test_detect_arduino_returns_none_without_sdk():
+    # the Arduino App Bricks SDK is absent off-board, so detection is a clean None (-> mock)
+    from camera.source import detect_arduino_camera
+    assert detect_arduino_camera() is None
+
+
 def test_select_camera_mock_and_auto_fallback():
     assert isinstance(select_camera("mock"), MockCamera)
     # auto with a nonexistent device must fall back to mock, never raise

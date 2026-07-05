@@ -73,6 +73,7 @@ class CameraService:
     # ----- discovery -----
 
     def announce_payload(self) -> bytes:
+        cam = type(self.camera).__name__
         return json.dumps({
             "schema": "ce.sensor.announce/1",
             "service": SERVICE,
@@ -84,7 +85,29 @@ class CameraService:
             "action_read": ACTION_READ,
             "action_control": ACTION_CONTROL,
             "qualities": list(QUALITY_LADDER.keys()),
+            # Deploy visibility: the selected camera + a compact host probe, gossiped so an
+            # operator (on the Mac, via the relay) can see whether the board found a REAL camera
+            # without shell access to the board.
+            "camera": cam,
+            "real": cam != "MockCamera",
+            "env": self._env_summary(),
         }, separators=(",", ":")).encode("utf-8")
+
+    def _env_summary(self) -> dict:
+        """Compact, cached host-capture probe for the announce payload."""
+        if getattr(self, "_env_cache", None) is None:
+            try:
+                from .source import probe_environment
+                e = probe_environment()
+                self._env_cache = {
+                    "sdk": e.get("has_arduino_sdk"),
+                    "cv2": e.get("has_cv2"),
+                    "video": len(e.get("dev_video") or []),
+                    "usb": e.get("sdk_usb_devices"),
+                }
+            except Exception as ex:  # noqa: BLE001
+                self._env_cache = {"error": str(ex)[:80]}
+        return self._env_cache
 
     # ----- frame capture -----
 

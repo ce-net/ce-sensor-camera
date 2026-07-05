@@ -1,0 +1,29 @@
+# Native-zipapp deploy vehicle for ce-sensor-camera.
+#
+# The board's ce node predates the script runtime tier, and a node on a GitHub-blocked
+# network (MagasinX) can't self-update over the mesh (see FINDINGS). But the whole app packs
+# into a single executable zipapp (.pyz), so it ships as a NATIVE ceapp — the original,
+# well-supported tier — and runs on the existing node with only app:install/app:native.
+# No node upgrade, no binary swap. Build: deploy/native/build.sh. Once 0.1.27 is on the fleet,
+# the canonical script-tier ../../ceapp.toml is the forward path.
+[app]
+name = "ce-sensor-camera"
+version = "0.1.0"
+summary = "Cap-gated camera sensor over ce-net (native zipapp deploy)"
+runtime = "native"
+provides = ["sensor.camera"]
+
+[native]
+bin = "ce-sensor-camera.pyz"
+artifacts = { "linux-arm64" = "sha256:6550ae7707db9b016611998c77bc4e6ce4c0c340807f49e9c3d5ab675ae7ea0d" }
+
+[daemon]
+enabled = true
+
+[sandbox]
+tier = "none"
+net = "mesh-only"
+
+[deps]
+requires = ["native"]
+capabilities = []

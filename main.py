@@ -35,7 +35,7 @@ from camera.service import (
     SERVICE,
     CameraService,
 )
-from camera.source import DEFAULT_QUALITY, select_camera
+from camera.source import DEFAULT_QUALITY, probe_environment, select_camera
 
 log = logging.getLogger("ce-sensor-camera")
 
@@ -51,9 +51,15 @@ def main() -> int:
     quality = os.environ.get("CE_SENSOR_QUALITY", DEFAULT_QUALITY)
     authorizer = authorizer_from_env()
 
-    # Auto-select: a real /dev/video* camera if present (via ffmpeg/fswebcam), else mock.
-    # Force with CE_SENSOR_CAMERA=mock|real|auto and CE_SENSOR_DEVICE=/dev/videoN; switch live
-    # via the `set_source` control op.
+    # Boot diagnostic: what does THIS host actually offer for capture? Logged so the first
+    # remote deploy over ce-net tells us whether the App Bricks SDK/cv2 import here and which
+    # camera devices exist — the one thing we could not learn without running code on the board.
+    for k, v in probe_environment().items():
+        log.info("env %s = %s", k, v)
+
+    # Auto-select the real camera: the Arduino App Bricks camera on the UNO Q (the SDK-faithful
+    # path for the Qualcomm ISP), else a generic V4L2 device, else mock. Force with
+    # CE_SENSOR_CAMERA=mock|real|auto and CE_SENSOR_DEVICE=/dev/videoN; switch live via `set_source`.
     device = os.environ.get("CE_SENSOR_DEVICE", "/dev/video0")
     source = os.environ.get("CE_SENSOR_CAMERA", "auto")
     selector = lambda mode: select_camera(mode, device)  # noqa: E731 - tiny closure over device

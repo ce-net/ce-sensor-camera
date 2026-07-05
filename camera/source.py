@@ -123,11 +123,18 @@ class V4l2Camera:
 class ArduinoCamera:
     """The Arduino UNO Q camera via the App Bricks SDK — the real, SDK-faithful path.
 
-    Uses ``arduino.app_peripherals.camera.Camera`` (see docs/arduino-camera.md), which is the
-    unified Arduino abstraction over USB (V4L), CSI, IP, and WebSocket cameras. The deltaco USB
-    camera is picked up as the default V4L camera. `capture()` returns a numpy frame, encoded
-    here to JPEG with cv2 (both ship in the App Bricks runtime on the board). The SDK and cv2 are
-    imported lazily so this module still loads (and tests run) on a Mac without them.
+    Uses ``arduino.app_peripherals.camera.Camera`` (github.com/arduino/app-bricks-py), the unified
+    Arduino abstraction over USB (V4L), CSI, IP, and WebSocket cameras. A Deltaco USB webcam is a
+    generic UVC/V4L device, so it is picked up as the first plugged USB camera by ``Camera(0)``
+    (``nth_plugged_camera`` scans ``/dev/v4l/by-id/``, USB before CSI). On the UNO Q this is the
+    ONLY correct path: the Qualcomm ISP means a raw ``ffmpeg -f v4l2`` does not work — the SDK
+    drives the camera through its GStreamer/libcamera media graph.
+
+    ``capture()`` returns an ``HxWx3`` numpy array in **RGB**. We JPEG-encode with the SDK's own
+    ``compress_to_jpeg`` (``arduino.app_utils.image.adjustments``) so colour order matches the SDK
+    exactly; if that helper is unavailable we fall back to cv2, converting RGB->BGR first (cv2
+    assumes BGR, so encoding RGB directly would swap red and blue). Everything is imported lazily
+    so this module still loads — and the tests run — on a Mac without the SDK.
     """
 
     def __init__(self, source=0) -> None:
@@ -145,17 +152,30 @@ class ArduinoCamera:
             self._quality = quality
         return w, h
 
+    @staticmethod
+    def _encode_jpeg(frame) -> bytes:
+        """RGB ndarray -> JPEG bytes, SDK-faithful. Prefer the SDK's compress_to_jpeg."""
+        try:
+            from arduino.app_utils.image.adjustments import compress_to_jpeg  # SDK path
+            buf = compress_to_jpeg(frame)
+            if buf is None:
+                raise OSError("compress_to_jpeg returned None")
+            return buf.tobytes()
+        except ImportError:
+            import cv2  # fallback: convert RGB->BGR so colours are correct
+            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            ok, buf = cv2.imencode(".jpg", bgr)
+            if not ok:
+                raise OSError("jpeg encode failed")
+            return buf.tobytes()
+
     def capture(self, quality: str) -> Frame:
-        import cv2  # lazy: App Bricks runtime only
         self._ensure(quality)
         frame = self._cam.capture()
         if frame is None:
             raise OSError("arduino camera returned no frame")
-        ok, buf = cv2.imencode(".jpg", frame)
-        if not ok:
-            raise OSError("jpeg encode failed")
         fh, fw = int(frame.shape[0]), int(frame.shape[1])
-        return Frame(data=buf.tobytes(), fmt="jpeg", width=fw, height=fh)
+        return Frame(data=self._encode_jpeg(frame), fmt="jpeg", width=fw, height=fh)
 
     def close(self) -> None:
         if self._cam is not None:
@@ -190,6 +210,43 @@ def detect_v4l2_camera(device: str = "/dev/video0") -> "V4l2Camera | None":
     if not (shutil.which("ffmpeg") or shutil.which("fswebcam")):
         return None
     return V4l2Camera(device)
+
+
+def probe_environment() -> dict:
+    """Report what the host actually offers for camera capture. Logged at boot so the FIRST
+    remote deploy answers the open questions (does the App Bricks SDK import here? is cv2
+    present? which /dev/video* and /dev/v4l/by-id devices exist?) without a separate app."""
+    import glob
+    import os
+
+    info: dict = {}
+    try:
+        info["uname"] = " ".join(os.uname())
+    except Exception:  # noqa: BLE001
+        info["uname"] = "?"
+    info["dev_video"] = sorted(glob.glob("/dev/video*"))
+    info["v4l_by_id"] = sorted(glob.glob("/dev/v4l/by-id/*"))
+
+    def _importable(mod: str) -> bool:
+        import importlib.util
+        try:
+            return importlib.util.find_spec(mod) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    info["has_arduino_sdk"] = _importable("arduino.app_peripherals.camera")
+    info["has_cv2"] = _importable("cv2")
+    info["has_numpy"] = _importable("numpy")
+
+    # What list_devices() (the SDK's own USB scan) sees, if the SDK is present.
+    info["sdk_usb_devices"] = None
+    if info["has_arduino_sdk"]:
+        try:
+            from arduino.app_peripherals.camera import V4LCamera
+            info["sdk_usb_devices"] = V4LCamera.list_devices()
+        except Exception as e:  # noqa: BLE001
+            info["sdk_usb_devices"] = f"error: {e}"
+    return info
 
 
 SOURCE_MODES = ("auto", "mock", "real")

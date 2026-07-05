@@ -52,6 +52,7 @@ class CameraService:
     def __init__(self, camera: Camera, authorizer: Authorizer, node_id: str,
                  instance: str = "camera", *, interval: float = DEFAULT_INTERVAL_SECONDS,
                  lease: float = DEFAULT_LEASE_SECONDS, quality: str = DEFAULT_QUALITY,
+                 selector: Optional[Callable[[str], Camera]] = None, source: str = "auto",
                  now: Callable[[], float] = time.time) -> None:
         self.camera = camera
         self.authorizer = authorizer
@@ -62,6 +63,10 @@ class CameraService:
         self.quality = quality if quality in QUALITY_LADDER else DEFAULT_QUALITY
         self.streaming = False
         self.seq = 0
+        # `selector(mode) -> Camera` enables on-demand mock/real switching via the API; when
+        # None the source is fixed to the constructed camera (e.g. in unit tests).
+        self.selector = selector
+        self.source_mode = source
         self._now = now
         self.subscribers: dict[str, float] = {}
 
@@ -103,7 +108,7 @@ class CameraService:
         cap = req.get("cap", "")
 
         # Control ops mutate what the camera does; they need the higher capability.
-        control_ops = {"start", "stop", "set_quality"}
+        control_ops = {"start", "stop", "set_quality", "set_source"}
         action = ACTION_CONTROL if op in control_ops else ACTION_READ
         if not self.authorizer.authorize(cap, action, msg.sender, self.node_id):
             return _err(f"unauthorized: present a capability granting {action}")
@@ -111,7 +116,10 @@ class CameraService:
         if op == "status":
             return _ok(service=SERVICE, instance=self.instance, streaming=self.streaming,
                        quality=self.quality, interval=self.interval,
-                       subscribers=len(self._live()), qualities=list(QUALITY_LADDER.keys()))
+                       subscribers=len(self._live()), qualities=list(QUALITY_LADDER.keys()),
+                       source=self.source_mode, camera=type(self.camera).__name__)
+        if op == "set_source":
+            return self._set_source(req.get("source"))
         if op == "start":
             self.streaming = True
             return _ok(streaming=True)
@@ -133,6 +141,21 @@ class CameraService:
             self.subscribers.pop(msg.sender, None)
             return _ok(subscribed=False)
         return _err(f"unknown op: {op!r}")
+
+    def _set_source(self, source) -> bytes:
+        """Switch the camera source on demand (auto/mock/real) so end-to-end tests can force
+        mock and real hardware stays plug-and-play."""
+        if self.selector is None:
+            return _err("source switching not available on this instance")
+        mode = str(source or "").lower()
+        if mode not in ("auto", "mock", "real"):
+            return _err("source must be one of auto|mock|real")
+        try:
+            self.camera = self.selector(mode)
+        except OSError as e:
+            return _err(f"cannot switch to {mode}: {e}")
+        self.source_mode = mode
+        return _ok(source=mode, camera=type(self.camera).__name__)
 
     # ----- data plane (push frames to cleared subscribers) -----
 

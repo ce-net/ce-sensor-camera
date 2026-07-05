@@ -126,3 +126,29 @@ def test_unknown_op_and_bad_json():
     svc = _svc(AllowAll())
     assert b"unknown op" in svc.handle(_req(b'{"op":"nope","cap":"x"}'))
     assert b"bad request" in svc.handle(_req(b"not json"))
+
+
+def test_set_source_is_control_level():
+    # ReadOnly may take_image but not switch the source (control-level).
+    svc = CameraService(MockCamera(), ReadOnly(), CAM_NODE, "test",
+                        selector=lambda m: MockCamera(), source="auto")
+    assert b"unauthorized" in svc.handle(_req(b'{"op":"set_source","source":"mock","cap":"x"}'))
+
+
+def test_set_source_switches_camera_on_demand():
+    calls = []
+
+    class Marker(MockCamera):
+        pass
+
+    def selector(mode):
+        calls.append(mode)
+        return Marker()
+
+    svc = CameraService(MockCamera(), AllowAll(), CAM_NODE, "test",
+                        selector=selector, source="auto")
+    reply = json.loads(svc.handle(_req(b'{"op":"set_source","source":"real","cap":"x"}')))
+    assert reply["source"] == "real" and calls == ["real"]
+    assert svc.source_mode == "real" and isinstance(svc.camera, Marker)
+    status = json.loads(svc.handle(_req(b'{"op":"status","cap":"x"}')))
+    assert status["source"] == "real" and status["camera"] == "Marker"

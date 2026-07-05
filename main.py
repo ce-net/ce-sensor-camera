@@ -35,7 +35,7 @@ from camera.service import (
     SERVICE,
     CameraService,
 )
-from camera.source import DEFAULT_QUALITY, MockCamera
+from camera.source import DEFAULT_QUALITY, select_camera
 
 log = logging.getLogger("ce-sensor-camera")
 
@@ -51,10 +51,15 @@ def main() -> int:
     quality = os.environ.get("CE_SENSOR_QUALITY", DEFAULT_QUALITY)
     authorizer = authorizer_from_env()
 
-    # Swap MockCamera -> V4l2Camera("/dev/video0") for a real camera. Nothing else changes.
-    camera = MockCamera()
-    service = CameraService(camera, authorizer, node_id, instance,
-                            interval=interval, quality=quality)
+    # Auto-select: a real /dev/video* camera if present (via ffmpeg/fswebcam), else mock.
+    # Force with CE_SENSOR_CAMERA=mock|real|auto and CE_SENSOR_DEVICE=/dev/videoN; switch live
+    # via the `set_source` control op.
+    device = os.environ.get("CE_SENSOR_DEVICE", "/dev/video0")
+    source = os.environ.get("CE_SENSOR_CAMERA", "auto")
+    selector = lambda mode: select_camera(mode, device)  # noqa: E731 - tiny closure over device
+    camera = selector(source)
+    service = CameraService(camera, authorizer, node_id, instance, interval=interval,
+                            quality=quality, selector=selector, source=source)
     if os.environ.get("CE_SENSOR_STREAM") == "1":
         service.streaming = True
     log.info("%s (%s) up on node %s; quality=%s interval=%ss streaming=%s",

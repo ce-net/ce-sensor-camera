@@ -5,9 +5,9 @@ ceapp. It provides a continuous frame stream plus a control API other systems dr
 start/stop the stream, raise/lower quality, and grab a one-shot image. Add another camera by
 running one install; consumers pick it up by topic and never change.
 
-Part of the building-telemetry mesh (`PLAN/ce-building-sensors.md`). Sibling:
-[`ce-sensor-climate`](../ce-sensor-climate). Uses the shared Python client
-[`ce-py`](../ce-py) (`ce.py` is vendored here for the zero-install script tier).
+Part of the building-telemetry mesh. Sibling: the ce-sensor-climate ceapp
+(github.com/ce-net/ce-sensor-climate). Uses the shared Python client ce-py
+(github.com/ce-net/ce-py; `ce.py` is vendored here for the zero-install script tier).
 
 ## How it works
 
